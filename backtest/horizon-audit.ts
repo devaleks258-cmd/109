@@ -1200,7 +1200,7 @@ const isDirectRun = (() => {
 })();
 
 if (isDirectRun) {
-  main().catch((err: unknown) => {
+  main().then(() => { process.exit(0); }).catch((err: unknown) => {
     console.error('Horizon audit failed:', err instanceof Error ? err.message : String(err));
     if (err instanceof Error && err.stack) {
       console.error(err.stack);
