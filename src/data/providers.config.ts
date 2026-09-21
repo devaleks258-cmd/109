@@ -11,6 +11,10 @@ export const PROVIDERS_CONFIG = {
   },
   deriv: {
     wsUrl: 'wss://ws.derivws.com/websockets/v3',
+    fallbackWsUrls: [
+      'wss://ws.binaryws.com/websockets/v3',
+      'wss://ws.derivws.com/websockets/v3',
+    ],
     defaultAppId: '1089',
     granularityMap: { '1m': 60, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400 } as Record<Timeframe, number>,
     reconnectBackoffMs: [3000, 6000, 12000, 30000, 60000],
@@ -52,6 +56,12 @@ export function resolveDerivAppId(): string {
 export function buildDerivWsUrl(): string {
   const appId = resolveDerivAppId();
   return `${PROVIDERS_CONFIG.deriv.wsUrl}?app_id=${encodeURIComponent(appId)}`;
+}
+
+export function buildDerivWsUrls(): readonly string[] {
+  const appId = resolveDerivAppId();
+  const urls = PROVIDERS_CONFIG.deriv.fallbackWsUrls ?? [PROVIDERS_CONFIG.deriv.wsUrl];
+  return urls.map((base) => `${base}?app_id=${encodeURIComponent(appId)}`);
 }
 export const DERIV_DEFAULT_APP_ID = PROVIDERS_CONFIG.deriv.defaultAppId;
 

@@ -3,7 +3,7 @@ import type { DataSource, ConnectResult } from '../source';
 import { normalizeServerTime } from '../source';
 import { serverClock } from '../server-clock';
 import { mapSymbolForDeriv } from '../symbols';
-import { PROVIDERS_CONFIG, buildDerivWsUrl } from '../providers.config';
+import { PROVIDERS_CONFIG, buildDerivWsUrls } from '../providers.config';
 import { captureError } from '@/lib/sentry';
 
 type StatusListener = (status: ConnectionStatus) => void;
@@ -81,6 +81,7 @@ export class DerivSource implements DataSource {
     this.activeTimeframe = null;
     this.reconnectCount = 0;
     this.lastCandleTime = 0;
+    this.wsUrlIndex = 0;
     this.streamHealthy = false;
     this.lastStreamMessageAt = 0;
     if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
@@ -140,6 +141,8 @@ export class DerivSource implements DataSource {
     return () => this.statusListeners.delete(cb);
   }
 
+  private wsUrlIndex = 0;
+
   private ensureSocket(): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) return Promise.resolve();
     if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
@@ -159,24 +162,49 @@ export class DerivSource implements DataSource {
         existing.addEventListener('close', onClose, { once: true });
       });
     }
-    return new Promise((resolve, reject) => {
-      const ws = new WebSocket(buildDerivWsUrl());
-      this.ws = ws;
-      ws.onopen = () => resolve();
-      ws.onerror = () => reject(new Error('Deriv WS connection failed'));
-      ws.onclose = () => {
-        this.pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error('Deriv WS closed')); });
-        this.pending.clear();
-        if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
-        // Стрим больше не жив — polling должен снова взять на себя роль
-        // основного источника, пока (и если) reconnect не восстановит WS.
-        this.streamHealthy = false;
-        if (this.activeSymbol !== null) this.scheduleReconnect();
-      };
-      ws.onmessage = (e) => {
-        if (typeof e.data === 'string') this.handleMessage(e.data);
-      };
-    });
+    return this.tryConnectWithFallback();
+  }
+
+  private tryConnectWithFallback(): Promise<void> {
+    const urls = buildDerivWsUrls();
+    const tryUrl = (index: number): Promise<void> => {
+      if (index >= urls.length) return Promise.reject(new Error('Deriv WS connection failed'));
+      const url = urls[index];
+      this.wsUrlIndex = index;
+      return new Promise((resolve, reject) => {
+        const ws = new WebSocket(url);
+        this.ws = ws;
+        let settled = false;
+        ws.onopen = () => { settled = true; resolve(); };
+        ws.onerror = () => {
+          if (settled) return;
+          settled = true;
+          ws.onopen = null;
+          ws.onmessage = null;
+          ws.onerror = null;
+          ws.onclose = null;
+          if (this.ws === ws) this.ws = null;
+          tryUrl(index + 1).then(resolve, reject);
+        };
+        ws.onclose = () => {
+          if (settled) {
+            this.pending.forEach((p) => { clearTimeout(p.timer); p.reject(new Error('Deriv WS closed')); });
+            this.pending.clear();
+            if (this.pingTimer) { clearInterval(this.pingTimer); this.pingTimer = null; }
+            this.streamHealthy = false;
+            if (this.activeSymbol !== null) this.scheduleReconnect();
+          } else {
+            settled = true;
+            if (this.ws === ws) this.ws = null;
+            tryUrl(index + 1).then(resolve, reject);
+          }
+        };
+        ws.onmessage = (e) => {
+          if (typeof e.data === 'string') this.handleMessage(e.data);
+        };
+      });
+    };
+    return tryUrl(this.wsUrlIndex);
   }
 
   private send(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -286,6 +314,7 @@ export class DerivSource implements DataSource {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => {
       if (!this.activeSymbol || !this.activeTimeframe) return;
+      this.wsUrlIndex = 0;
       void this.ensureSocket().then(() => {
         const derivSymbol = mapSymbolForDeriv(this.activeSymbol!);
         return this.subscribeStreams(derivSymbol).catch((e) => {

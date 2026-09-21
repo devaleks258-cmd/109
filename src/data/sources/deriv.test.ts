@@ -6,9 +6,11 @@ vi.mock('../server-clock', () => ({
 
 vi.mock('../providers.config', () => ({
   buildDerivWsUrl: () => 'wss://mock.deriv.com?app_id=test',
+  buildDerivWsUrls: () => ['wss://mock.deriv.com?app_id=test'],
   PROVIDERS_CONFIG: {
     deriv: {
       wsUrl: 'wss://mock.deriv.com',
+      fallbackWsUrls: ['wss://mock.deriv.com'],
       appId: 'test',
       granularityMap: { '1m': 60, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400 },
       reconnectBackoffMs: [3000, 6000, 12000, 30000, 60000],
